@@ -1,5 +1,6 @@
 const express = require('express');
 const { BigQuery } = require('@google-cloud/bigquery');
+const pool = require('./db');
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -23,11 +24,7 @@ app.get('/test-bq', async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
-});
-const pool = require('./db');
-
+// DB test
 app.get('/test-db', async (req, res) => {
   try {
     const result = await pool.query('SELECT NOW()');
@@ -44,3 +41,6 @@ app.get('/test-db', async (req, res) => {
   }
 });
 
+app.listen(port, () => {
+  console.log(`Server listening on port ${port}`);
+});
