@@ -7,6 +7,28 @@ const app = express();
 const port = process.env.PORT || 8080;
 const { ensureDataset, bindIngestSA } = require('./bigquery');
 const ALLOWED_CONNECTORS = ['shopify', 'meta', 'google'];
+const session = require('express-session');
+const passport = require('./auth');
+
+app.get(
+  '/auth/google',
+  passport.authenticate('google', { scope: ['profile', 'email'] })
+);
+
+app.get(
+  '/auth/google/callback',
+  passport.authenticate('google', {
+    failureRedirect: '/auth/failure'
+  }),
+  (req, res) => {
+    res.json({ success: true, user: req.user });
+  }
+);
+
+app.get('/auth/failure', (req, res) => {
+  res.status(401).json({ error: 'authentication failed' });
+});
+
 
 
 // CRITICAL: This allows Express to read JSON data in POST requests
