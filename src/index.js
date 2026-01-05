@@ -6,6 +6,8 @@ const pool = require('./db');
 const app = express();
 const port = process.env.PORT || 8080;
 const { ensureDataset, bindIngestSA } = require('./bigquery');
+const ALLOWED_CONNECTORS = ['shopify', 'meta', 'google'];
+
 
 // CRITICAL: This allows Express to read JSON data in POST requests
 app.use(express.json()); 
