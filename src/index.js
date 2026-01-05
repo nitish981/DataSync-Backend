@@ -72,6 +72,65 @@ app.post('/workspaces', async (req, res) => {
   }
 });
 
+app.post('/workspaces/:shortId/connectors/:connector', async (req, res) => {
+  const { shortId, connector } = req.params;
+
+  // 1. Validate connector
+  if (!ALLOWED_CONNECTORS.includes(connector)) {
+    return res.status(400).json({ error: 'invalid connector' });
+  }
+
+  try {
+    // 2. Fetch workspace
+    const wsResult = await pool.query(
+      'SELECT id FROM workspaces WHERE short_id = $1',
+      [shortId]
+    );
+
+    if (wsResult.rows.length === 0) {
+      return res.status(404).json({ error: 'workspace not found' });
+    }
+
+    const workspaceId = wsResult.rows[0].id;
+
+    // 3. Prevent duplicate connector
+    const existing = await pool.query(
+      `SELECT 1 FROM workspace_connectors
+       WHERE workspace_id = $1 AND connector_type = $2`,
+      [workspaceId, connector]
+    );
+
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ error: 'connector already added' });
+    }
+
+    // 4. Create dataset
+    const datasetId = `${shortId}__${connector}`;
+    await ensureDataset(datasetId);
+
+    // 5. Bind ingest SA
+    await bindIngestSA(datasetId);
+
+    // 6. Save mapping
+    await pool.query(
+      `INSERT INTO workspace_connectors (workspace_id, connector_type, dataset_id)
+       VALUES ($1, $2, $3)`,
+      [workspaceId, connector, datasetId]
+    );
+
+    res.status(201).json({
+      workspace: shortId,
+      connector,
+      dataset: datasetId
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'connector setup failed' });
+  }
+});
+
+
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
 });
