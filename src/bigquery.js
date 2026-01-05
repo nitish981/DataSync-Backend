@@ -26,25 +26,28 @@ async function ensureDataset(datasetId) {
  */
 async function bindIngestSA(datasetId) {
   const dataset = bq.dataset(datasetId);
-  const [policy] = await dataset.iam.getPolicy();
 
-  policy.bindings = policy.bindings || [];
+  const [metadata] = await dataset.getMetadata();
+  const access = metadata.access || [];
 
-  const role = 'roles/bigquery.dataEditor';
-  const member = 'serviceAccount:ingest-template-sa@datasync-482209.iam.gserviceaccount.com';
+  const ingestSaEmail = 'ingest-template-sa@datasync-482209.iam.gserviceaccount.com';
 
-  let binding = policy.bindings.find(b => b.role === role);
-  if (!binding) {
-    binding = { role, members: [] };
-    policy.bindings.push(binding);
+  const alreadyExists = access.some(
+    entry =>
+      entry.role === 'WRITER' &&
+      entry.userByEmail === ingestSaEmail
+  );
+
+  if (!alreadyExists) {
+    access.push({
+      role: 'WRITER',
+      userByEmail: ingestSaEmail
+    });
+
+    await dataset.setMetadata({ access });
   }
-
-  if (!binding.members.includes(member)) {
-    binding.members.push(member);
-  }
-
-  await dataset.iam.setPolicy(policy);
 }
+
 
 
 module.exports = {
