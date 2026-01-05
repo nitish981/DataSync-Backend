@@ -2,7 +2,7 @@ const express = require('express');
 const crypto = require('crypto'); // Moved to top
 const { BigQuery } = require('@google-cloud/bigquery');
 const pool = require('./db');
-
+const { requireAuth } = require('./middleware');
 const app = express();
 const port = process.env.PORT || 8080;
 const { ensureDataset, bindIngestSA } = require('./bigquery');
@@ -67,7 +67,7 @@ function generateWorkspaceShortId() {
 }
 
 // Workspace Creation
-app.post('/workspaces', async (req, res) => {
+app.post('/workspaces',requireAuth, async (req, res) => {
   const name = req.body?.name || 'Untitled Workspace';
   let created = false;
 
@@ -94,7 +94,7 @@ app.post('/workspaces', async (req, res) => {
   }
 });
 
-app.post('/workspaces/:shortId/connectors/:connector', async (req, res) => {
+app.post('/workspaces/:shortId/connectors/:connector',requireAuth, async (req, res) => {
   const { shortId, connector } = req.params;
 
   // 1. Validate connector
