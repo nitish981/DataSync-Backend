@@ -28,8 +28,10 @@ async function bindIngestSA(datasetId) {
   const dataset = bq.dataset(datasetId);
   const [policy] = await dataset.iam.getPolicy();
 
+  policy.bindings = policy.bindings || [];
+
   const role = 'roles/bigquery.dataEditor';
-  const member = 'ingest-template-sa@datasync-482209.iam.gserviceaccount.com';
+  const member = 'serviceAccount:ingest-template-sa@datasync-482209.iam.gserviceaccount.com';
 
   let binding = policy.bindings.find(b => b.role === role);
   if (!binding) {
@@ -43,6 +45,7 @@ async function bindIngestSA(datasetId) {
 
   await dataset.iam.setPolicy(policy);
 }
+
 
 module.exports = {
   ensureDataset,
