@@ -75,8 +75,8 @@ app.post('/workspaces',requireAuth, async (req, res) => {
     while (!created) {
       const shortId = generateWorkspaceShortId();
       const result = await pool.query(
-        `INSERT INTO workspaces (short_id, name)
-         VALUES ($1, $2)
+        `INSERT INTO workspaces (short_id, name,owner_user_id)
+         VALUES ($1, $2, $3)
          ON CONFLICT (short_id) DO NOTHING
          RETURNING id, short_id, name`,
         [shortId, name]
