@@ -144,11 +144,10 @@ app.post(
     try {
       // 🔒 Enforce workspace ownership
       const wsResult = await pool.query(
-        `SELECT id
-         FROM workspaces
-         WHERE short_id = $1 AND owner_user_id = $2`,
-        [shortId, req.user.id]
-      );
+  'SELECT id FROM workspaces WHERE short_id = $1 AND owner_user_id = $2',
+  [shortId, req.user.id]
+);
+
 
       if (wsResult.rows.length === 0) {
         return res.status(404).json({ error: 'workspace not found' });
