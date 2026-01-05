@@ -14,7 +14,7 @@ async function ensureDataset(datasetId) {
     await bq.createDataset(datasetId, {
       location: 'US', // storage location, NOT client location
       labels: {
-        managed_by: 'datapilot',
+        managed_by: 'datasync',
         type: 'connector'
       }
     });
@@ -29,7 +29,7 @@ async function bindIngestSA(datasetId) {
   const [policy] = await dataset.iam.getPolicy();
 
   const role = 'roles/bigquery.dataEditor';
-  const member = 'serviceAccount:ingest-sa@datapilot.iam.gserviceaccount.com';
+  const member = 'ingest-template-sa@datasync-482209.iam.gserviceaccount.com';
 
   let binding = policy.bindings.find(b => b.role === role);
   if (!binding) {
