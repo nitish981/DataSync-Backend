@@ -30,7 +30,7 @@ async function bindIngestSA(datasetId) {
   const [metadata] = await dataset.getMetadata();
   const access = metadata.access || [];
 
-  const ingestSaEmail = 'ingest-template-sa@datasync-482209.iam.gserviceaccount.com';
+  const ingestSaEmail = 'ingest-template-sa@project-c231bbd5-840a-4e3a-b06.iam.gserviceaccount.com';
 
   const alreadyExists = access.some(
     entry =>
