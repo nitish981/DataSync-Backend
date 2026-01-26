@@ -195,6 +195,51 @@ app.post(
   }
 );
 
+app.get('/auth/shopify', requireAuth, async (req, res) => {
+  const { shop, workspace } = req.query;
+
+  if (!shop || !workspace) {
+    return res.status(400).json({ error: 'shop and workspace required' });
+  }
+
+  const state = crypto.randomBytes(16).toString('hex');
+  const authURL = buildAuthURL(shop, state);
+  res.redirect(authURL);
+});
+
+app.get('/auth/shopify/callback', requireAuth, async (req, res) => {
+  const { shop, code } = req.query;
+
+  try {
+    const token = await exchangeCodeForToken(shop, code);
+    const secretRef = await storeShopifyToken(req.user.id, shop, token);
+
+    await pool.query(
+      `INSERT INTO shopify_stores (workspace_id, shop_domain, secret_ref, installed_by_user)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (workspace_id, shop_domain) DO NOTHING`,
+      [req.query.workspace, shop, secretRef, req.user.id]
+    );
+
+    res.json({ success: true, shop });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Shopify OAuth failed' });
+  }
+});
+
+app.get('/workspaces/:id/shopify/stores', requireAuth, async (req, res) => {
+  const result = await pool.query(
+    `SELECT shop_domain, created_at
+     FROM shopify_stores
+     WHERE workspace_id = $1`,
+    [req.params.id]
+  );
+
+  res.json(result.rows);
+});
+
+
 // ----------------------------------------------------
 // 🚀 START SERVER
 // ----------------------------------------------------
