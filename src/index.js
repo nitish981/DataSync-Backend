@@ -1,6 +1,9 @@
+// ----------------------------------------------------
+// 📦 IMPORTS
+// ----------------------------------------------------
+const express = require('express');
 const session = require('express-session');
 const passport = require('./auth');
-const express = require('express');
 const crypto = require('crypto');
 const { BigQuery } = require('@google-cloud/bigquery');
 
@@ -8,6 +11,19 @@ const pool = require('./db');
 const { requireAuth } = require('./middleware');
 const { ensureDataset, bindIngestSA } = require('./bigquery');
 
+// ✅ Shopify imports (MISSING BEFORE)
+const {
+  buildAuthURL,
+  exchangeCodeForToken
+} = require('./shopify/oauth');
+
+const {
+  storeShopifyToken
+} = require('./shopify/secrets');
+
+// ----------------------------------------------------
+// 🚀 APP INIT
+// ----------------------------------------------------
 const app = express();
 app.set('trust proxy', 1);
 
@@ -20,7 +36,11 @@ app.use(
   session({
     secret: process.env.SESSION_SECRET,
     resave: false,
-    saveUninitialized: false
+    saveUninitialized: false,
+    cookie: {
+      secure: true,     // REQUIRED for Cloud Run HTTPS
+      sameSite: 'lax'
+    }
   })
 );
 
@@ -33,7 +53,7 @@ app.use(passport.session());
 app.use(express.json());
 
 // ----------------------------------------------------
-// 🔐 AUTH ROUTES
+// 🔐 GOOGLE AUTH ROUTES
 // ----------------------------------------------------
 app.get(
   '/auth/google',
@@ -82,7 +102,6 @@ app.get('/test-db', async (req, res) => {
     const result = await pool.query('SELECT NOW()');
     res.json({ success: true, time: result.rows[0].now });
   } catch (err) {
-    console.error(err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -95,14 +114,13 @@ function generateWorkspaceShortId() {
 }
 
 // ----------------------------------------------------
-// 🏢 CREATE WORKSPACE (OWNER BOUND)
+// 🏢 CREATE WORKSPACE
 // ----------------------------------------------------
 app.post('/workspaces', requireAuth, async (req, res) => {
   const name = req.body?.name || 'Untitled Workspace';
-  let created = false;
 
   try {
-    while (!created) {
+    while (true) {
       const shortId = generateWorkspaceShortId();
 
       const result = await pool.query(
@@ -110,26 +128,20 @@ app.post('/workspaces', requireAuth, async (req, res) => {
          VALUES ($1, $2, $3)
          ON CONFLICT (short_id) DO NOTHING
          RETURNING id, short_id, name`,
-        [
-          shortId,
-          name,
-          req.user.id // ✅ OWNER IS PASSED HERE
-        ]
+        [shortId, name, req.user.id]
       );
 
       if (result.rows.length > 0) {
-        created = true;
         return res.status(201).json(result.rows[0]);
       }
     }
   } catch (err) {
-    console.error('Workspace Creation Error:', err);
     res.status(500).json({ error: 'workspace creation failed' });
   }
 });
 
 // ----------------------------------------------------
-// 🔗 CONNECTOR ATTACH (SECURE + MULTI-TENANT SAFE)
+// 🔗 CONNECTOR ATTACH
 // ----------------------------------------------------
 const ALLOWED_CONNECTORS = ['shopify', 'meta', 'google'];
 
@@ -143,58 +155,37 @@ app.post(
       return res.status(400).json({ error: 'invalid connector' });
     }
 
-    try {
-      // 🔒 Enforce workspace ownership
-      const wsResult = await pool.query(
-  'SELECT id FROM workspaces WHERE short_id = $1 AND owner_user_id = $2',
-  [shortId, req.user.id]
-);
+    const wsResult = await pool.query(
+      `SELECT id
+       FROM workspaces
+       WHERE short_id = $1 AND owner_user_id = $2`,
+      [shortId, req.user.id]
+    );
 
-
-      if (wsResult.rows.length === 0) {
-        return res.status(404).json({ error: 'workspace not found' });
-      }
-
-      const workspaceId = wsResult.rows[0].id;
-
-      // Prevent duplicate connector
-      const existing = await pool.query(
-        `SELECT 1
-         FROM workspace_connectors
-         WHERE workspace_id = $1 AND connector_type = $2`,
-        [workspaceId, connector]
-      );
-
-      if (existing.rows.length > 0) {
-        return res.status(409).json({ error: 'connector already added' });
-      }
-
-      // Create dataset
-      const datasetId = `${shortId}__${connector}`;
-      await ensureDataset(datasetId);
-
-      // Bind ingest SA
-      await bindIngestSA(datasetId);
-
-      // Persist mapping
-      await pool.query(
-        `INSERT INTO workspace_connectors (workspace_id, connector_type, dataset_id)
-         VALUES ($1, $2, $3)`,
-        [workspaceId, connector, datasetId]
-      );
-
-      res.status(201).json({
-        workspace: shortId,
-        connector,
-        dataset: datasetId
-      });
-    } catch (err) {
-      console.error('Connector Attach Error:', err);
-      res.status(500).json({ error: 'connector setup failed' });
+    if (wsResult.rows.length === 0) {
+      return res.status(404).json({ error: 'workspace not found' });
     }
+
+    const workspaceId = wsResult.rows[0].id;
+    const datasetId = `${shortId}__${connector}`;
+
+    await ensureDataset(datasetId);
+    await bindIngestSA(datasetId);
+
+    await pool.query(
+      `INSERT INTO workspace_connectors (workspace_id, connector_type, dataset_id)
+       VALUES ($1, $2, $3)
+       ON CONFLICT DO NOTHING`,
+      [workspaceId, connector, datasetId]
+    );
+
+    res.json({ workspace: shortId, connector, dataset: datasetId });
   }
 );
 
+// ----------------------------------------------------
+// 🛍️ SHOPIFY OAUTH START
+// ----------------------------------------------------
 app.get('/auth/shopify', requireAuth, async (req, res) => {
   const { shop, workspace } = req.query;
 
@@ -202,32 +193,61 @@ app.get('/auth/shopify', requireAuth, async (req, res) => {
     return res.status(400).json({ error: 'shop and workspace required' });
   }
 
+  // 🔒 Validate workspace ownership
+  const ws = await pool.query(
+    `SELECT id FROM workspaces WHERE id = $1 AND owner_user_id = $2`,
+    [workspace, req.user.id]
+  );
+
+  if (ws.rows.length === 0) {
+    return res.status(403).json({ error: 'unauthorized workspace' });
+  }
+
   const state = crypto.randomBytes(16).toString('hex');
   const authURL = buildAuthURL(shop, state);
+
   res.redirect(authURL);
 });
 
+// ----------------------------------------------------
+// 🛍️ SHOPIFY OAUTH CALLBACK
+// ----------------------------------------------------
 app.get('/auth/shopify/callback', requireAuth, async (req, res) => {
-  const { shop, code } = req.query;
+  const { shop, code, workspace } = req.query;
 
-  try {
-    const token = await exchangeCodeForToken(shop, code);
-    const secretRef = await storeShopifyToken(req.user.id, shop, token);
-
-    await pool.query(
-      `INSERT INTO shopify_stores (workspace_id, shop_domain, secret_ref, installed_by_user)
-       VALUES ($1, $2, $3, $4)
-       ON CONFLICT (workspace_id, shop_domain) DO NOTHING`,
-      [req.query.workspace, shop, secretRef, req.user.id]
-    );
-
-    res.json({ success: true, shop });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Shopify OAuth failed' });
+  if (!shop || !code || !workspace) {
+    return res.status(400).json({ error: 'invalid callback params' });
   }
+
+  // 🔒 Re-validate workspace ownership
+  const ws = await pool.query(
+    `SELECT id FROM workspaces WHERE id = $1 AND owner_user_id = $2`,
+    [workspace, req.user.id]
+  );
+
+  if (ws.rows.length === 0) {
+    return res.status(403).json({ error: 'unauthorized workspace' });
+  }
+
+  const token = await exchangeCodeForToken(shop, code);
+
+  // ✅ Store token PER WORKSPACE
+  const secretRef = await storeShopifyToken(workspace, shop, token);
+
+  await pool.query(
+    `INSERT INTO shopify_stores
+     (workspace_id, shop_domain, secret_ref, installed_by_user)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (workspace_id, shop_domain) DO NOTHING`,
+    [workspace, shop, secretRef, req.user.id]
+  );
+
+  res.json({ success: true, shop });
 });
 
+// ----------------------------------------------------
+// 🧾 LIST SHOPIFY STORES (DROPDOWN)
+// ----------------------------------------------------
 app.get('/workspaces/:id/shopify/stores', requireAuth, async (req, res) => {
   const result = await pool.query(
     `SELECT shop_domain, created_at
@@ -238,7 +258,6 @@ app.get('/workspaces/:id/shopify/stores', requireAuth, async (req, res) => {
 
   res.json(result.rows);
 });
-
 
 // ----------------------------------------------------
 // 🚀 START SERVER
