@@ -11,7 +11,7 @@ const pool = require('./db');
 const { requireAuth } = require('./middleware');
 const { ensureDataset, bindIngestSA } = require('./bigquery');
 
-// ✅ Shopify imports (MISSING BEFORE)
+// ✅ Shopify imports
 const {
   buildAuthURL,
   exchangeCodeForToken
@@ -37,9 +37,10 @@ app.use(
     secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: false,
+    proxy: true,        // Added for Cloud Run proxy support
     cookie: {
       secure: true,     // REQUIRED for Cloud Run HTTPS
-      sameSite: 'lax'
+      sameSite: 'none'  // Changed to 'none' so session persists after Shopify redirect
     }
   })
 );
@@ -203,7 +204,10 @@ app.get('/auth/shopify', requireAuth, async (req, res) => {
     return res.status(403).json({ error: 'unauthorized workspace' });
   }
 
-  const state = crypto.randomBytes(16).toString('hex');
+  // Pack workspace into state so Shopify sends it back to the callback
+  const nonce = crypto.randomBytes(8).toString('hex');
+  const state = `${nonce}:${workspace}`; 
+
   const authURL = buildAuthURL(shop, state);
 
   res.redirect(authURL);
@@ -213,10 +217,18 @@ app.get('/auth/shopify', requireAuth, async (req, res) => {
 // 🛍️ SHOPIFY OAUTH CALLBACK
 // ----------------------------------------------------
 app.get('/auth/shopify/callback', requireAuth, async (req, res) => {
-  const { shop, code, workspace } = req.query;
+  // Extract state instead of workspace from the query
+  const { shop, code, state } = req.query;
 
-  if (!shop || !code || !workspace) {
+  if (!shop || !code || !state) {
     return res.status(400).json({ error: 'invalid callback params' });
+  }
+
+  // Unpack workspace from state
+  const [nonce, workspace] = state.split(':');
+
+  if (!workspace) {
+    return res.status(400).json({ error: 'workspace ID missing from state' });
   }
 
   // 🔒 Re-validate workspace ownership
